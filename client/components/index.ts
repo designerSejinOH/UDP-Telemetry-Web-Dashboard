@@ -6,3 +6,7 @@ export * from "./LapInfo";
 export * from "./EngineInfo";
 export * from "./FuelInfo";
 export * from "./PositionInfo";
+export * from "./TelemetryChart";
+export * from "./LapComparisonChart";
+export * from "./LapSelector";
+export * from "./TrackMap";

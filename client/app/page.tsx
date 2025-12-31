@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
+
 import {
   CircularGauge,
   GearDisplay,
@@ -11,7 +12,13 @@ import {
   EngineInfo,
   FuelInfo,
   PositionInfo,
+  TelemetryChart,
+  LapComparisonChart,
+  LapSelector,
+  TrackMap,
+  ChartDataPoint,
 } from "@/components";
+import { useLapRecording } from "@/hooks/useLapRecording";
 import type { TelemetryData } from "@/types/telemetry";
 
 export default function Dashboard() {
@@ -19,6 +26,24 @@ export default function Dashboard() {
   const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [mounted, setMounted] = useState<boolean>(false);
+
+  // 차트 데이터 (최근 100개 포인트)
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+  const startTimeRef = useRef<number>(null);
+
+  // 랩 기록 기능
+  const {
+    currentSession,
+    isRecording,
+    selectedLaps,
+    currentLapData,
+    autoRecording,
+    startNewSession,
+    endSession,
+    processTelemetry,
+    toggleLapSelection,
+    toggleAutoRecording,
+  } = useLapRecording();
 
   // 서버와 클라이언트 모두 동일한 초기값 사용
   const [serverHost, setServerHost] = useState<string>(
@@ -32,13 +57,14 @@ export default function Dashboard() {
 
   // Hydration 완료 후 localStorage에서 설정 불러오기
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+
     const savedHost = localStorage.getItem("gt7-server-host");
     const savedPort = localStorage.getItem("gt7-server-port");
 
     if (savedHost) setServerHost(savedHost);
     if (savedPort) setServerPort(savedPort);
-    
-    setMounted(true);
   }, []);
 
   useEffect(() => {
@@ -52,12 +78,37 @@ export default function Dashboard() {
       ws.onopen = () => {
         console.log("WebSocket 연결됨");
         setConnected(true);
+        startTimeRef.current = Date.now(); // 연결 시 타이머 리셋
       };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data) as TelemetryData;
           setTelemetry(data);
+
+          // 랩 기록 처리
+          processTelemetry(data);
+
+          // 차트 데이터 추가 (0.5초마다 샘플링)
+          const elapsedSeconds = startTimeRef.current
+            ? (Date.now() - startTimeRef.current) / 1000
+            : 0;
+          setChartData((prev) => {
+            const newPoint: ChartDataPoint = {
+              time: Math.floor(elapsedSeconds),
+              speed: data.speed,
+              rpm: data.engineRPM,
+              throttle: parseFloat(data.throttlePercent),
+              brake: parseFloat(data.brakePercent),
+              tireTempFL: data.tireTemp.frontLeft,
+              tireTempFR: data.tireTemp.frontRight,
+              tireTempRL: data.tireTemp.rearLeft,
+              tireTempRR: data.tireTemp.rearRight,
+            };
+            const updated = [...prev, newPoint];
+            // 최근 100개만 유지 (약 50초 분량)
+            return updated.slice(-100);
+          });
         } catch (err) {
           console.error("데이터 파싱 에러:", err);
         }
@@ -199,7 +250,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      <div className="grid grid-cols-[1fr_400px_1fr] grid-rows-[auto_1fr_auto] gap-5 h-screen">
+      <div className="grid grid-cols-[1fr_400px_1fr] grid-rows-[auto_1fr_auto] gap-5 h-fit">
         {/* Header */}
         <motion.div
           className="col-span-3 text-center"
@@ -335,6 +386,149 @@ export default function Dashboard() {
           <PositionInfo telemetry={telemetry} />
         </motion.div>
       </div>
+
+      {/* 차트 섹션 */}
+      <motion.div
+        className="mt-8 space-y-6"
+        initial={{ opacity: 0, y: 50 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.6, duration: 0.6 }}
+      >
+        {/* 트랙맵 섹션 */}
+        {isRecording && currentLapData.length > 0 && (
+          <div className="space-y-4">
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent">
+              🗺️ 트랙맵 (실시간)
+            </h2>
+            <TrackMap
+              currentLapData={currentLapData}
+              previousLaps={
+                currentSession?.laps
+                  .filter((lap) => selectedLaps.includes(lap.lapNumber))
+                  .map((lap) => ({
+                    lapNumber: lap.lapNumber,
+                    data: lap.telemetryPoints,
+                  })) || []
+              }
+              width={800}
+              height={600}
+            />
+            {selectedLaps.length > 0 && (
+              <p className="text-sm text-slate-400 text-center">
+                현재 랩(실선)과 선택된 랩들(점선)을 비교하세요. 색상은 속도를
+                나타냅니다.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* 랩 기록 섹션 */}
+        <LapSelector
+          currentSession={currentSession}
+          selectedLaps={selectedLaps}
+          onToggleLap={toggleLapSelection}
+          onStartSession={startNewSession}
+          onEndSession={endSession}
+          isRecording={isRecording}
+          autoRecording={autoRecording}
+          onToggleAutoRecording={toggleAutoRecording}
+          currentLapDataCount={currentLapData.length}
+        />
+
+        <h2 className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-purple-500 bg-clip-text text-transparent">
+          실시간 텔레메트리
+        </h2>
+
+        <div className="space-y-6">
+          {/* 속도 & RPM 차트 */}
+          <div>
+            <h3 className="text-lg font-semibold text-slate-300 mb-3">
+              속도 & RPM
+            </h3>
+            <TelemetryChart data={chartData} type="speed" />
+          </div>
+
+          {/* 스로틀 & 브레이크 차트 */}
+          <div>
+            <h3 className="text-lg font-semibold text-slate-300 mb-3">입력</h3>
+            <TelemetryChart data={chartData} type="input" />
+          </div>
+
+          {/* 타이어 온도 차트 */}
+          <div>
+            <h3 className="text-lg font-semibold text-slate-300 mb-3">
+              타이어 온도
+            </h3>
+            <TelemetryChart data={chartData} type="tire" />
+          </div>
+        </div>
+      </motion.div>
+
+      {/* 랩 비교 섹션 */}
+      {isRecording && currentSession && currentSession.laps.length > 0 && (
+        <motion.div
+          className="mt-8 space-y-6"
+          initial={{ opacity: 0, y: 50 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.8, duration: 0.6 }}
+        >
+          <h2 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
+            👻 랩 비교 (고스트)
+          </h2>
+
+          {selectedLaps.length > 0 ? (
+            <div className="space-y-6">
+              {/* 속도 비교 */}
+              <div>
+                <h3 className="text-lg font-semibold text-slate-300 mb-3">
+                  속도 비교
+                  <span className="text-sm text-slate-500 ml-2">
+                    (현재 랩 vs {selectedLaps.map((n) => `랩 ${n}`).join(", ")})
+                  </span>
+                </h3>
+                <LapComparisonChart
+                  currentLapData={currentLapData}
+                  previousLaps={currentSession.laps}
+                  selectedLapNumbers={selectedLaps}
+                  type="speed"
+                />
+              </div>
+
+              {/* 입력 비교 */}
+              <div>
+                <h3 className="text-lg font-semibold text-slate-300 mb-3">
+                  입력 비교
+                </h3>
+                <LapComparisonChart
+                  currentLapData={currentLapData}
+                  previousLaps={currentSession.laps}
+                  selectedLapNumbers={selectedLaps}
+                  type="input"
+                />
+              </div>
+
+              {/* 타이어 온도 비교 */}
+              <div>
+                <h3 className="text-lg font-semibold text-slate-300 mb-3">
+                  타이어 온도 비교
+                </h3>
+                <LapComparisonChart
+                  currentLapData={currentLapData}
+                  previousLaps={currentSession.laps}
+                  selectedLapNumbers={selectedLaps}
+                  type="tire"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="p-8 bg-slate-900/50 border border-purple-400/30 rounded-xl text-center">
+              <p className="text-slate-400">
+                왼쪽 패널에서 비교할 랩을 선택하세요 (최대 3개)
+              </p>
+            </div>
+          )}
+        </motion.div>
+      )}
     </div>
   );
 }

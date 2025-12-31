@@ -7,21 +7,28 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "server": "tsx server/gt7-server.ts"
+    "server": "tsx server/gt7-server.ts",
+    "deploy": "yarn build && pm2 start ecosystem.config.js",
+    "deploy:docker": "docker-compose up -d --build",
+    "deploy:stop": "pm2 stop all",
+    "deploy:restart": "pm2 restart all",
+    "deploy:logs": "pm2 logs"
   },
   "dependencies": {
     "next": "16.1.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "motion": "^12.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "js-salsa20": "^1.2.0",
+    "recharts": "^2.15.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/ws": "^8.18.1",
+    "@types/ws": "^8.5.10",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
